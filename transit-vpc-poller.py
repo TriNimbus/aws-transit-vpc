@@ -5,7 +5,7 @@
 #  with the License. A copy of the License is located at                                                             #
 #                                                                                                                    #
 #      http://aws.amazon.com/asl/                                                                                    #
-#                                                                                                                    #   
+#                                                                                                                    #
 #  or in the "license" file accompanying this file. This file is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES #
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions    #
 #  and limitations under the License.                                                                                #
@@ -59,6 +59,11 @@ def updateConfigXML(xml, config, vgwTags, account_id, csr_number):
   newXml.appendChild(xmldoc.createTextNode(vgwTags.get(config.get('PREFERRED_PATH_TAG', 'none'), 'none')))
   transitConfig.appendChild(newXml)
 
+  #Configure the environment
+  newXml = xmldoc.createElement("environment")
+  newXml.appendChild(xmldoc.createTextNode(vgwTags.get('environment'), 'none')))
+  transitConfig.appendChild(newXml)
+
   #Add transit config to XML
   xmldoc.childNodes[0].appendChild(transitConfig)
   return str(xmldoc.toxml())
@@ -68,12 +73,12 @@ def sendAnonymousData(config, vgwTags, region_id, vpn_connections):
   #Code to send anonymous data if enabled
   if config['SENDDATA'] == "Yes":
     log.debug("Sending Anonymous Data")
-    dataDict = {}    
+    dataDict = {}
     postDict = {}
     dataDict['region'] = region_id
     dataDict['vpn_connections'] = vpn_connections
     if vgwTags[config['HUB_TAG']] == config['HUB_TAG_VALUE']:
-      dataDict['status'] = "create"  
+      dataDict['status'] = "create"
     else:
       dataDict['status'] = "delete"
     dataDict['preferred_path'] = vgwTags.get(config.get('PREFERRED_PATH_TAG','none'), 'none')
@@ -104,7 +109,7 @@ def lambda_handler(event, context):
 
   log.info('Retrieved IP of transit VPN gateways: %s, %s',config['EIP1'], config['EIP2'])
   # use this variable to determine if a VGW has been processed so we will only process one VGW per run (one per minute)
-  processed_vgw = False 
+  processed_vgw = False
   #Get list of regions so poller can look for VGWs in all regions
   ec2=boto3.client('ec2',region_name='us-east-1')
   regions=ec2.describe_regions()
@@ -158,18 +163,19 @@ def lambda_handler(event, context):
         #Create Customer Gateways (will create CGWs if they do not exist, otherwise, the API calls are ignored)
         log.debug('Creating Customer Gateways with IP %s, %s', config['EIP1'], config['EIP2'])
         cg1=ec2.create_customer_gateway(Type='ipsec.1',PublicIp=config['EIP1'],BgpAsn=config['BGP_ASN'])
-        ec2.create_tags(Resources=[cg1['CustomerGateway']['CustomerGatewayId']], Tags=[{'Key': 'Name','Value': 'Transit VPC Endpoint1' }])
+        ec2.create_tags(Resources=[cg1['CustomerGateway']['CustomerGatewayId']], Tags=[{'Key': 'Name','Value': 'Transit VPC Endpoint1' },{'Key': 'Environment','Value': vgwTags['environment']}])
         cg2=ec2.create_customer_gateway(Type='ipsec.1',PublicIp=config['EIP2'],BgpAsn=config['BGP_ASN'])
-        ec2.create_tags(Resources=[cg2['CustomerGateway']['CustomerGatewayId']], Tags=[{'Key': 'Name','Value': 'Transit VPC Endpoint2' }])
+        ec2.create_tags(Resources=[cg2['CustomerGateway']['CustomerGatewayId']], Tags=[{'Key': 'Name','Value': 'Transit VPC Endpoint2' },{'Key': 'Environment','Value': vgwTags['environment']}])
         log.info('Created Customer Gateways: %s, %s',cg1['CustomerGateway']['CustomerGatewayId'], cg2['CustomerGateway']['CustomerGatewayId'])
-  
+
         #Create and tag first VPN connection
         vpn1=ec2.create_vpn_connection(Type='ipsec.1',CustomerGatewayId=cg1['CustomerGateway']['CustomerGatewayId'],VpnGatewayId=vgw['VpnGatewayId'],Options={'StaticRoutesOnly':False})
-        ec2.create_tags(Resources=[vpn1['VpnConnection']['VpnConnectionId']], 
+        ec2.create_tags(Resources=[vpn1['VpnConnection']['VpnConnectionId']],
             Tags=[
                 {'Key': 'Name','Value': vgw['VpnGatewayId']+'-to-Transit-VPC CSR1' },
                 {'Key': config['HUB_TAG'],'Value': config['HUB_TAG_VALUE'] },
-                {'Key': 'transitvpc:endpoint','Value': 'CSR1' }
+                {'Key': 'transitvpc:endpoint','Value': 'CSR1' },
+                {'Key': 'Environment','Value': vgwTags['environment'] }
             ])
         #Create and tag second VPN connection
         vpn2=ec2.create_vpn_connection(Type='ipsec.1',CustomerGatewayId=cg2['CustomerGateway']['CustomerGatewayId'],VpnGatewayId=vgw['VpnGatewayId'],Options={'StaticRoutesOnly':False})
@@ -177,10 +183,11 @@ def lambda_handler(event, context):
                     Tags=[
                 {'Key': 'Name','Value': vgw['VpnGatewayId']+'-to-Transit-VPC CSR2' },
                 {'Key': config['HUB_TAG'],'Value': config['HUB_TAG_VALUE'] },
-                {'Key': 'transitvpc:endpoint','Value': 'CSR2' }
+                {'Key': 'transitvpc:endpoint','Value': 'CSR2' },
+                {'Key': 'Environment','Value': vgwTags['environment'] }
             ])
         log.info('Created VPN connections: %s, %s', vpn1['VpnConnection']['VpnConnectionId'], vpn2['VpnConnection']['VpnConnectionId'])
-  	
+
         #Retrieve VPN configuration
         vpn_config1=ec2.describe_vpn_connections(VpnConnectionIds=[vpn1['VpnConnection']['VpnConnectionId']])
         vpn_config1=vpn_config1['VpnConnections'][0]['CustomerGatewayConfiguration']
